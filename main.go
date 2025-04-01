@@ -3,10 +3,11 @@ package main
 import (
 	"github.com/gin-gonic/gin"
 	"log"
-	"music-conveyor/cache"
 	"music-conveyor/controllers"
-	"music-conveyor/database"
-	"music-conveyor/storage"
+	"music-conveyor/platform/cache"
+	"music-conveyor/platform/database"
+	"music-conveyor/platform/kafka"
+	"music-conveyor/platform/storage"
 	"os"
 	"os/signal"
 	"syscall"
@@ -37,6 +38,7 @@ func initializeServices() {
 	cache.ConnectRedis()
 	storage.ConnectMinio()
 
+	kafka.NewKafkaConfig()
 	log.Println("All services initialized successfully")
 }
 

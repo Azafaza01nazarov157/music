@@ -27,12 +27,12 @@ func ConnectDatabase() {
 	)
 
 	newLogger := logger.New(
-		log.New(os.Stdout, "\r\n", log.LstdFlags), // io writer
+		log.New(os.Stdout, "\r\n", log.LstdFlags),
 		logger.Config{
-			SlowThreshold:             time.Second, // Slow SQL threshold
-			LogLevel:                  logger.Info, // Log level
-			IgnoreRecordNotFoundError: true,        // Ignore ErrRecordNotFound error for logger
-			Colorful:                  true,        // Enable color
+			SlowThreshold:             time.Second,
+			LogLevel:                  logger.Info,
+			IgnoreRecordNotFoundError: true,
+			Colorful:                  true,
 		},
 	)
 
