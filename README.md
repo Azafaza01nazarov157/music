@@ -1,43 +1,33 @@
-# User & Playlist Service
+![image](https://github.com/user-attachments/assets/a3db60d1-a7ef-4bf1-b5fe-c308bbf6eea4)![image](https://github.com/user-attachments/assets/13b1a928-530b-4cea-bbfa-1fa395474ba5)# User & Playlist Service
 
 A microservice for managing users and playlists.
 
 ## Configuration
 
-The application is configured through environment variables. You can create a `.env` file in the root directory based on the `.env.example` template:
+The application is configured through environment variables. You should define them in your system or in an `application.properties` or `application.yml` file.
 
-```bash
-# Copy the example environment file
-cp .env.example .env
-
-# Edit the .env file with your configuration
-nano .env
-```
-
-### Important Environment Variables
+### Important Configuration Properties
 
 - **Server Settings:**
-  - `PORT`: The port on which the server will listen (default: 8080)
-  - `ENV`: Environment mode (`development` or `production`)
+  - `server.port`: The port on which the server will listen (default: 8080)
+  - `spring.profiles.active`: Environment mode (`development` or `production`)
 
 - **Database Settings:**
-  - `DB_HOST`: PostgreSQL host (default: localhost)
-  - `DB_PORT`: PostgreSQL port (default: 5432)
-  - `DB_NAME`: Database name
-  - `DB_USER`: Database user
-  - `DB_PASSWORD`: Database password
+  - `spring.datasource.url`: PostgreSQL connection URL
+  - `spring.datasource.username`: Database user
+  - `spring.datasource.password`: Database password
 
 - **JWT Settings:**
-  - `JWT_SECRET`: Secret key for JWT authentication
-  - `JWT_EXPIRATION`: Token expiration time (default: 3600s)
+  - `jwt.secret`: Secret key for JWT authentication
+  - `jwt.expiration`: Token expiration time (default: 3600s)
 
 ### Development Mode
 
-During development, you can skip connecting to external services by setting the following environment variables in your `.env` file:
+During development, you can disable certain features by setting the following properties in `application.properties`:
 
 ```
-# Skip services during development
-DB_SKIP=true
+# Skip database connection during development
+spring.datasource.url=
 ```
 
 This is useful when you want to work on specific parts of the application without having all services running.
@@ -45,7 +35,7 @@ This is useful when you want to work on specific parts of the application withou
 ## Running the Application
 
 ```bash
-./gradlew bootRun
+java -jar user-playlist-service.jar
 ```
 
 The server will start on the configured port (default: 8080).
@@ -62,6 +52,15 @@ The server will start on the configured port (default: 8080).
 - `POST /api/playlist/:id/tracks`: Add a track to a playlist
 - `DELETE /api/playlist/:id/tracks/:trackId`: Remove a track from a playlist
 - `GET /api/playlist`: Get user playlists
+
+
+
+Architecture
+
+
+![image](https://github.com/user-attachments/assets/1db7990e-71ee-4014-8c94-0c3c9cecb248)
+
+![image](https://github.com/user-attachments/assets/cf6ec9b5-0445-454a-9cbf-c3eb8cdd90f0)
 
 
 
