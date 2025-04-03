@@ -1,4 +1,4 @@
-![image](https://github.com/user-attachments/assets/a3db60d1-a7ef-4bf1-b5fe-c308bbf6eea4)![image](https://github.com/user-attachments/assets/13b1a928-530b-4cea-bbfa-1fa395474ba5)# User & Playlist Service
+# User & Playlist Service
 
 A microservice for managing users and playlists.
 
