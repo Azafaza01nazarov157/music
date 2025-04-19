@@ -2,28 +2,25 @@ package database
 
 import (
 	"fmt"
+	"log"
+	_struct "music-conveyor/models/struct"
+	"music-conveyor/platform/config"
+	"os"
+	"time"
+
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
-	"log"
-	"music-conveyor/models/struct"
-	"os"
-	"time"
 )
 
 var DB *gorm.DB
 
 func ConnectDatabase() {
-	dbHost := getEnv("DB_HOST", "localhost")
-	dbPort := getEnv("DB_PORT", "5444")
-	dbUser := getEnv("DB_USER", "postgres")
-	dbPassword := getEnv("DB_PASSWORD", "postgres")
-	dbName := getEnv("DB_NAME", "postgres")
-	dbSSLMode := getEnv("DB_SSLMODE", "disable")
+	cfg := config.LoadConfig()
 
 	dsn := fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s TimeZone=UTC",
-		dbHost, dbPort, dbUser, dbPassword, dbName, dbSSLMode,
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable TimeZone=UTC",
+		cfg.DBHost, cfg.DBPort, cfg.DBUser, cfg.DBPassword, cfg.DBName,
 	)
 
 	newLogger := logger.New(
@@ -79,14 +76,6 @@ func migrateDatabase() {
 	}
 
 	log.Println("Database migration completed successfully")
-}
-
-func getEnv(key, defaultValue string) string {
-	value := os.Getenv(key)
-	if value == "" {
-		return defaultValue
-	}
-	return value
 }
 
 func CloseDatabase() {

@@ -4,8 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
-	"strconv"
+	"music-conveyor/platform/config"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -15,24 +14,15 @@ var RedisClient *redis.Client
 var Ctx = context.Background()
 
 func ConnectRedis() {
-	redisHost := getEnv("REDIS_HOST", "localhost")
-	redisPort := getEnv("REDIS_PORT", "6379")
-	redisPassword := getEnv("REDIS_PASSWORD", "")
-	redisDB := getEnv("REDIS_DB", "0")
-
-	db, err := strconv.Atoi(redisDB)
-	if err != nil {
-		log.Printf("Invalid Redis DB index: %v, using default 0", err)
-		db = 0
-	}
+	cfg := config.LoadConfig()
 
 	RedisClient = redis.NewClient(&redis.Options{
-		Addr:     fmt.Sprintf("%s:%s", redisHost, redisPort),
-		Password: redisPassword,
-		DB:       db,
+		Addr:     fmt.Sprintf("%s:%s", cfg.RedisHost, cfg.RedisPort),
+		Password: cfg.RedisPassword,
+		DB:       cfg.RedisDB,
 	})
 
-	_, err = RedisClient.Ping(Ctx).Result()
+	_, err := RedisClient.Ping(Ctx).Result()
 	if err != nil {
 		log.Printf("Failed to connect to Redis: %v", err)
 	} else {
@@ -69,12 +59,4 @@ func CloseRedis() {
 		}
 		log.Println("Redis connection closed")
 	}
-}
-
-func getEnv(key, defaultValue string) string {
-	value := os.Getenv(key)
-	if value == "" {
-		return defaultValue
-	}
-	return value
 }

@@ -2,9 +2,8 @@ package kafka
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"os"
+	"music-conveyor/platform/config"
 	"strings"
 	"time"
 
@@ -30,13 +29,15 @@ type Consumer struct {
 }
 
 func NewKafkaConfig() Config {
+	cfg := config.LoadConfig()
+
 	log.Println("Connected to KAFKA storage")
 	return Config{
-		BootstrapServers:     getEnv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
-		TopicAudioProcessing: getEnv("KAFKA_TOPIC_AUDIO_PROCESSING", "audio.processing"),
-		GroupID:              getEnv("KAFKA_CONSUMER_GROUP_ID", "audio-processor"),
-		MaxRetries:           getEnvInt("KAFKA_MAX_ATTEMPTS", 3),
-		BackoffInterval:      time.Duration(getEnvInt("KAFKA_BACKOFF_INTERVAL", 5000)) * time.Millisecond,
+		BootstrapServers:     cfg.KafkaBrokers,
+		TopicAudioProcessing: "audio.processing",
+		GroupID:              cfg.KafkaGroupID,
+		MaxRetries:           3,
+		BackoffInterval:      5 * time.Second,
 	}
 }
 
@@ -111,28 +112,4 @@ func (c *Consumer) ConsumeMessages(ctx context.Context, handler func(key, value 
 
 func (c *Consumer) Close() error {
 	return c.reader.Close()
-}
-
-func getEnv(key, defaultValue string) string {
-	value := os.Getenv(key)
-	if value == "" {
-		return defaultValue
-	}
-	return value
-}
-
-func getEnvInt(key string, defaultValue int) int {
-	valueStr := os.Getenv(key)
-	if valueStr == "" {
-		return defaultValue
-	}
-
-	value := 0
-	_, err := fmt.Sscanf(valueStr, "%d", &value)
-	if err != nil {
-		log.Printf("Неверное значение для %s: %v, используем значение по умолчанию (%d)", key, err, defaultValue)
-		return defaultValue
-	}
-
-	return value
 }

@@ -1,19 +1,29 @@
 package main
 
 import (
-	"github.com/gin-gonic/gin"
 	"log"
 	"music-conveyor/controllers"
 	"music-conveyor/platform/cache"
+	"music-conveyor/platform/config"
 	"music-conveyor/platform/database"
 	"music-conveyor/platform/kafka"
 	"music-conveyor/platform/storage"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/gin-gonic/gin"
 )
 
+var appConfig *config.Config
+
 func main() {
+	appConfig = config.LoadConfig()
+
+	if appConfig.Environment != "app" {
+		gin.SetMode(gin.ReleaseMode)
+	}
+
 	initializeServices()
 
 	setupGracefulShutdown()
@@ -24,10 +34,8 @@ func main() {
 
 	setupRoutes(router)
 
-	port := getEnv("PORT", "8080")
-
-	log.Printf("Starting audio streaming service on :%s", port)
-	if err := router.Run(":" + port); err != nil {
+	log.Printf("Starting audio streaming service on :%s", appConfig.Port)
+	if err := router.Run(":" + appConfig.Port); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
 }

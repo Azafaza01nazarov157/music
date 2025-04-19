@@ -3,12 +3,12 @@ package storage
 import (
 	"context"
 	"fmt"
-	"github.com/minio/minio-go/v7"
 	"io"
 	"log"
-	"os"
-	"strconv"
+	"music-conveyor/platform/config"
 	"time"
+
+	"github.com/minio/minio-go/v7"
 
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
@@ -17,20 +17,11 @@ var MinioClient *minio.Client
 var ctx = context.Background()
 
 func ConnectMinio() {
-	endpoint := getEnv("MINIO_ENDPOINT", "localhost:9000")
-	accessKey := getEnv("MINIO_ACCESS_KEY", "adminUser")
-	secretKey := getEnv("MINIO_SECRET_KEY", "adminUser")
-	useSSL := getEnv("MINIO_USE_SSL", "false")
+	cfg := config.LoadConfig()
 
-	ssl, err := strconv.ParseBool(useSSL)
-	if err != nil {
-		log.Printf("Invalid MINIO_USE_SSL value: %v, using default (false)", err)
-		ssl = false
-	}
-
-	client, err := minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
-		Secure: ssl,
+	client, err := minio.New(cfg.MinioEndpoint, &minio.Options{
+		Creds:  credentials.NewStaticV4(cfg.MinioAccessKey, cfg.MinioSecretKey, ""),
+		Secure: cfg.MinioUseSSL,
 	})
 
 	if err != nil {
@@ -40,11 +31,26 @@ func ConnectMinio() {
 	MinioClient = client
 	log.Println("Connected to MinIO storage")
 
-	ensureBucketExists("audio-tracks")
-	ensureBucketExists("audio-cache")
+	// Ensure all required buckets exist
+	EnsureRequiredBuckets()
 }
 
-func ensureBucketExists(bucketName string) {
+// EnsureRequiredBuckets creates all required buckets if they don't exist
+func EnsureRequiredBuckets() {
+	requiredBuckets := []string{
+		"music-originals",
+		"audio-tracks",
+		"audio-previews",
+		"audio-cache",
+	}
+
+	for _, bucket := range requiredBuckets {
+		EnsureBucketExists(bucket)
+	}
+}
+
+// EnsureBucketExists ensures a bucket exists, creating it if necessary
+func EnsureBucketExists(bucketName string) {
 	exists, err := MinioClient.BucketExists(ctx, bucketName)
 	if err != nil {
 		log.Printf("Error checking bucket %s: %v", bucketName, err)
@@ -58,6 +64,8 @@ func ensureBucketExists(bucketName string) {
 			return
 		}
 		log.Printf("Created bucket: %s", bucketName)
+	} else {
+		log.Printf("Bucket already exists: %s", bucketName)
 	}
 }
 
@@ -114,12 +122,4 @@ func CopyAudioFile(srcBucket, srcObject, destBucket, destObject string) error {
 
 func GetFileInfo(bucketName, objectName string) (minio.ObjectInfo, error) {
 	return MinioClient.StatObject(ctx, bucketName, objectName, minio.StatObjectOptions{})
-}
-
-func getEnv(key, defaultValue string) string {
-	value := os.Getenv(key)
-	if value == "" {
-		return defaultValue
-	}
-	return value
 }
