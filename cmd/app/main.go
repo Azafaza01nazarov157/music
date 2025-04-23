@@ -30,11 +30,14 @@ func main() {
 
 	router := gin.Default()
 
+	router.MaxMultipartMemory = appConfig.MaxUploadSize
+
 	setupMiddleware(router)
 
 	setupRoutes(router)
 
 	log.Printf("Starting audio streaming service on :%s", appConfig.Port)
+	log.Printf("Maximum upload size: %d bytes", appConfig.MaxUploadSize)
 	if err := router.Run(":" + appConfig.Port); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}

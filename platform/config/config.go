@@ -30,9 +30,10 @@ type Config struct {
 	KafkaBrokers string
 	KafkaGroupID string
 
-	LogLevel   string
-	APITimeout time.Duration
-	JWTSecret  string
+	LogLevel      string
+	APITimeout    time.Duration
+	JWTSecret     string
+	MaxUploadSize int64 // Maximum file upload size in bytes
 }
 
 func LoadConfig() *Config {
@@ -66,9 +67,10 @@ func LoadConfig() *Config {
 		KafkaGroupID: getEnv("KAFKA_GROUP_ID", "music-conveyor"),
 
 		// Application settings
-		LogLevel:   getEnv("LOG_LEVEL", "info"),
-		APITimeout: time.Duration(getEnvAsInt("API_TIMEOUT", 30)) * time.Second,
-		JWTSecret:  getEnv("JWT_SECRET", "E27E5C94368F2FE3C4862F53DD433B26"),
+		LogLevel:      getEnv("LOG_LEVEL", "info"),
+		APITimeout:    time.Duration(getEnvAsInt("API_TIMEOUT", 30)) * time.Second,
+		JWTSecret:     getEnv("JWT_SECRET", "E27E5C94368F2FE3C4862F53DD433B26"),
+		MaxUploadSize: getEnvAsInt64("MAX_UPLOAD_SIZE", 100*1024*1024),
 	}
 }
 
@@ -83,6 +85,14 @@ func getEnv(key, defaultValue string) string {
 func getEnvAsInt(key string, defaultValue int) int {
 	valueStr := getEnv(key, "")
 	if value, err := strconv.Atoi(valueStr); err == nil {
+		return value
+	}
+	return defaultValue
+}
+
+func getEnvAsInt64(key string, defaultValue int64) int64 {
+	valueStr := getEnv(key, "")
+	if value, err := strconv.ParseInt(valueStr, 10, 64); err == nil {
 		return value
 	}
 	return defaultValue
