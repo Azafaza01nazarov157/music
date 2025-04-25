@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -14,6 +15,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
+)
+
+const (
+	DefaultQuality = "320"
+	CacheTimeout   = 24 * time.Hour
 )
 
 func HealthCheck(c *gin.Context) {
@@ -24,33 +31,53 @@ func HealthCheck(c *gin.Context) {
 }
 
 func StreamTrack(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
 	trackID, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid track ID"})
 		return
 	}
 
-	var track _struct.Track
-	result := database.DB.First(&track, trackID)
-	if result.Error != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Track not found"})
+	if !hasAccessToTrack(uint(userID.(uint)), uint(trackID)) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
 		return
 	}
 
-	quality := c.DefaultQuery("quality", "high")
+	cacheKey := fmt.Sprintf("track:%d:info", trackID)
+	var track _struct.Track
+	cachedData, err := cache.GetCachedTrackData(cacheKey)
+	if err == nil {
+		if err := json.Unmarshal([]byte(cachedData), &track); err != nil {
+			log.Printf("Error unmarshaling cached track data: %v", err)
+		}
+	} else {
+		result := database.DB.First(&track, trackID)
+		if result.Error != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Track not found"})
+			return
+		}
 
-	userID := uint(0)
-	if user, exists := c.Get("user"); exists {
-		userID = user.(_struct.User).ID
+		if trackData, err := json.Marshal(track); err == nil {
+			cache.CacheTrackData(cacheKey, string(trackData), CacheTimeout)
+		}
+	}
+
+	quality := c.DefaultQuery("quality", DefaultQuality)
+	if !isValidQuality(quality) {
+		quality = DefaultQuality
 	}
 
 	sessionID := uuid.New().String()
 	streamSession := _struct.StreamSession{
-		UserID:       userID,
+		UserID:       uint(userID.(uint)),
 		TrackID:      uint(trackID),
 		SessionID:    sessionID,
 		Quality:      quality,
-		CurrentPos:   0,
 		IsActive:     true,
 		IPAddress:    c.ClientIP(),
 		UserAgent:    c.Request.UserAgent(),
@@ -64,6 +91,9 @@ func StreamTrack(c *gin.Context) {
 
 	cache.CacheStreamSession(sessionID, streamSession, time.Hour)
 
+	bucketName := "audio-tracks"
+	objectName := fmt.Sprintf("%d/%s.mp3", trackID, quality)
+
 	rangeHeader := c.Request.Header.Get("Range")
 	var offset, length int64 = 0, 0
 
@@ -76,9 +106,6 @@ func StreamTrack(c *gin.Context) {
 			length = length - offset + 1
 		}
 	}
-
-	bucketName := "audio-tracks"
-	objectName := track.FilePath
 
 	obj, err := storage.GetAudioFileStream(bucketName, objectName, offset, length)
 	if err != nil {
@@ -95,18 +122,10 @@ func StreamTrack(c *gin.Context) {
 		return
 	}
 
-	contentType := "audio/mpeg"
-	if track.FileFormat == "flac" {
-		contentType = "audio/flac"
-	} else if track.FileFormat == "wav" {
-		contentType = "audio/wav"
-	} else if track.FileFormat == "ogg" {
-		contentType = "audio/ogg"
-	}
-
-	c.Header("Content-Type", contentType)
+	c.Header("Content-Type", "audio/mpeg")
 	c.Header("Accept-Ranges", "bytes")
 	c.Header("Content-Length", fmt.Sprintf("%d", info.Size))
+	c.Header("Cache-Control", "public, max-age=31536000")
 
 	if rangeHeader != "" {
 		c.Header("Content-Range", fmt.Sprintf("bytes %d-%d/%d", offset, info.Size-1, info.Size))
@@ -121,6 +140,27 @@ func StreamTrack(c *gin.Context) {
 	}
 
 	go updateStreamStats(uint(trackID))
+}
+
+func isValidQuality(quality string) bool {
+	validQualities := map[string]bool{
+		"64":  true,
+		"128": true,
+		"192": true,
+		"256": true,
+		"320": true,
+	}
+	return validQualities[quality]
+}
+
+func hasAccessToTrack(userID, trackID uint) bool {
+	var track _struct.Track
+	result := database.DB.First(&track, trackID)
+	if result.Error != nil {
+		return false
+	}
+
+	return track.UserID == userID
 }
 
 func DownloadTrack(c *gin.Context) {
@@ -213,22 +253,120 @@ func StreamStatus(c *gin.Context) {
 }
 
 func updateStreamStats(trackID uint) {
-	var stats _struct.StreamStats
-	result := database.DB.Where("track_id = ?", trackID).First(&stats)
+	database.DB.Model(&_struct.Track{}).
+		Where("id = ?", trackID).
+		UpdateColumn("play_count", gorm.Expr("play_count + ?", 1))
 
-	now := time.Now()
+	statsKey := fmt.Sprintf("track:%d:stats", trackID)
+	cache.RedisClient.Incr(cache.Ctx, statsKey)
+}
 
+func GetStreamableQualities(c *gin.Context) {
+	trackID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid track ID"})
+		return
+	}
+
+	var track _struct.Track
+	result := database.DB.First(&track, trackID)
 	if result.Error != nil {
-		stats = _struct.StreamStats{
-			TrackID:        trackID,
-			TotalStreams:   1,
-			UniqueUsers:    1,
-			LastStreamedAt: &now,
+		if result.Error == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Track not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
 		}
-		database.DB.Create(&stats)
-	} else {
-		stats.TotalStreams++
-		stats.LastStreamedAt = &now
-		database.DB.Save(&stats)
+		return
+	}
+
+	bucketName := "audio-tracks"
+	qualities := []string{"320"}
+	availableQualities := make([]string, 0)
+
+	for _, quality := range qualities {
+		objectName := fmt.Sprintf("%d/%s.mp3", trackID, quality)
+		_, err := storage.GetFileInfo(bucketName, objectName)
+		if err == nil {
+			availableQualities = append(availableQualities, quality)
+		}
+	}
+
+	qualityInfo := _struct.TrackQuality{
+		TrackID:            uint(trackID),
+		AvailableQualities: availableQualities,
+		UpdatedAt:          time.Now(),
+	}
+
+	if err := database.DB.Where("track_id = ?", trackID).
+		Assign(qualityInfo).
+		FirstOrCreate(&qualityInfo).Error; err != nil {
+		log.Printf("Error updating track qualities: %v", err)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"track_id":  trackID,
+		"qualities": availableQualities,
+	})
+}
+
+func StreamPreview(c *gin.Context) {
+	trackID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid track ID"})
+		return
+	}
+
+	var track _struct.Track
+	result := database.DB.First(&track, trackID)
+	if result.Error != nil {
+		if result.Error == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Track not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		}
+		return
+	}
+
+	previewPlay := _struct.PreviewPlay{
+		TrackID:   uint(trackID),
+		UserID:    0,
+		IPAddress: c.ClientIP(),
+		UserAgent: c.Request.UserAgent(),
+		PlayedAt:  time.Now(),
+	}
+
+	if userID, exists := c.Get("user_id"); exists {
+		previewPlay.UserID = userID.(uint)
+	}
+
+	if err := database.DB.Create(&previewPlay).Error; err != nil {
+		log.Printf("Error recording preview play: %v", err)
+	}
+
+	bucketName := "audio-previews"
+	objectName := fmt.Sprintf("%d/preview.mp3", trackID)
+
+	obj, err := storage.GetAudioFile(bucketName, objectName)
+	if err != nil {
+		log.Printf("Error getting preview file: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error getting preview file"})
+		return
+	}
+	defer obj.Close()
+
+	info, err := obj.Stat()
+	if err != nil {
+		log.Printf("Error getting preview info: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error getting preview info"})
+		return
+	}
+
+	c.Header("Content-Type", "audio/mpeg")
+	c.Header("Content-Length", fmt.Sprintf("%d", info.Size))
+	c.Header("Cache-Control", "public, max-age=31536000")
+
+	if _, err := io.Copy(c.Writer, obj); err != nil {
+		log.Printf("Error streaming preview: %v", err)
+		return
 	}
 }

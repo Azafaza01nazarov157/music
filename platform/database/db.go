@@ -67,6 +67,10 @@ func migrateDatabase() {
 		&_struct.AudioCache{},
 		&_struct.StreamStats{},
 		&_struct.ConversionJob{},
+		&_struct.AudioProcessingMessage{},
+		&_struct.TrackMessage{},
+		&_struct.TrackQuality{},
+		&_struct.PreviewPlay{},
 		&_struct.StreamConfig{},
 		&_struct.StorageLocation{},
 	)

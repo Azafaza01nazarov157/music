@@ -32,14 +32,33 @@ func main() {
 
 	if !skipKafka {
 		audioProcessor := processor.NewAudioProcessor(kafkaConfig)
+		trackSyncProcessor := processor.NewTrackSyncProcessor(kafkaConfig)
 
 		go func() {
-			if err := audioProcessor.Start(ctx); err != nil {
-				if ctx.Err() == nil {
-					log.Printf("Error starting audio processor: %v", err)
-					log.Println("Retrying in 10 seconds...")
-					time.Sleep(10 * time.Second)
+			for {
+				if err := audioProcessor.Start(ctx); err != nil {
+					if ctx.Err() == nil {
+						log.Printf("Error starting audio processor: %v", err)
+						log.Println("Retrying in 10 seconds...")
+						time.Sleep(10 * time.Second)
+						continue
+					}
 				}
+				break
+			}
+		}()
+
+		go func() {
+			for {
+				if err := trackSyncProcessor.Start(ctx); err != nil {
+					if ctx.Err() == nil {
+						log.Printf("Error starting track sync processor: %v", err)
+						log.Println("Retrying in 10 seconds...")
+						time.Sleep(10 * time.Second)
+						continue
+					}
+				}
+				break
 			}
 		}()
 
@@ -50,6 +69,10 @@ func main() {
 
 		if err := audioProcessor.Stop(); err != nil {
 			log.Printf("Error stopping audio processor: %v", err)
+		}
+
+		if err := trackSyncProcessor.Stop(); err != nil {
+			log.Printf("Error stopping track sync processor: %v", err)
 		}
 	} else {
 		log.Println("Running in development mode without Kafka")
@@ -63,5 +86,5 @@ func main() {
 	database.CloseDatabase()
 	cache.CloseRedis()
 
-	log.Println("Audio processor stopped")
+	log.Println("All processors stopped")
 }

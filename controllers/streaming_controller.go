@@ -7,7 +7,6 @@ import (
 	_struct "music-conveyor/models/struct"
 	"music-conveyor/platform/cache"
 	"music-conveyor/platform/database"
-	"music-conveyor/platform/storage"
 	"net/http"
 	"strconv"
 	"time"
@@ -15,94 +14,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
-
-func GetStreamableQualities(c *gin.Context) {
-	trackID, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid track ID"})
-		return
-	}
-
-	var track _struct.Track
-	result := database.DB.First(&track, trackID)
-	if result.Error != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Track not found"})
-		return
-	}
-
-	cacheKey := fmt.Sprintf("track:%d:qualities", trackID)
-	cachedData, err := cache.GetCachedTrackData(cacheKey)
-	if err == nil {
-		var qualities []string
-		if err := json.Unmarshal([]byte(cachedData), &qualities); err == nil {
-			c.JSON(http.StatusOK, gin.H{
-				"track_id":  trackID,
-				"qualities": qualities,
-			})
-			return
-		}
-	}
-
-	bucketName := "audio-tracks"
-	availableQualities := []string{}
-
-	potentialQualities := []string{"64", "128", "192", "256", "320"}
-	for _, quality := range potentialQualities {
-		objectName := fmt.Sprintf("%d/%s.mp3", trackID, quality)
-		_, err := storage.GetFileInfo(bucketName, objectName)
-		if err == nil {
-			availableQualities = append(availableQualities, quality)
-		}
-	}
-
-	qualitiesJSON, _ := json.Marshal(availableQualities)
-	cache.CacheTrackData(cacheKey, string(qualitiesJSON), 12*time.Hour)
-
-	c.JSON(http.StatusOK, gin.H{
-		"track_id":  trackID,
-		"qualities": availableQualities,
-	})
-}
-
-func StreamPreview(c *gin.Context) {
-	trackID, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid track ID"})
-		return
-	}
-
-	var track _struct.Track
-	result := database.DB.First(&track, trackID)
-	if result.Error != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Track not found"})
-		return
-	}
-
-	bucketName := "audio-previews"
-	objectName := fmt.Sprintf("%d/preview.mp3", trackID)
-
-	obj, err := storage.GetAudioFile(bucketName, objectName)
-	if err != nil {
-		log.Printf("Error getting preview file: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error getting preview file"})
-		return
-	}
-	defer obj.Close()
-
-	info, err := obj.Stat()
-	if err != nil {
-		log.Printf("Error getting object info: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error getting file info"})
-		return
-	}
-
-	c.Header("Content-Type", "audio/mpeg")
-	c.Header("Content-Length", fmt.Sprintf("%d", info.Size))
-	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s_preview.mp3", track.Title))
-	c.Status(http.StatusOK)
-
-	http.ServeContent(c.Writer, c.Request, track.Title, time.Now(), obj)
-}
 
 func GetTrackStreamingStatus(c *gin.Context) {
 	trackID, err := strconv.ParseUint(c.Param("id"), 10, 64)

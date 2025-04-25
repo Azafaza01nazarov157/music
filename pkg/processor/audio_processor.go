@@ -14,59 +14,80 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/google/uuid"
 )
-
-type AudioProcessingMessage struct {
-	TrackID            string   `json:"trackId"`
-	UserID             string   `json:"userId"`
-	OriginalPath       string   `json:"originalPath"`
-	FileName           string   `json:"fileName"`
-	FileFormat         string   `json:"fileFormat"`
-	ProcessingRequired []string `json:"processingRequired"`
-	IsPublic           bool     `json:"isPublic"`
-	Metadata           struct {
-		Title       string `json:"title"`
-		Artist      string `json:"artist"`
-		Album       string `json:"album"`
-		Genre       string `json:"genre"`
-		Duration    int    `json:"duration"`
-		ReleaseDate string `json:"releaseDate"`
-	} `json:"metadata"`
-}
-
-type ProcessingResult struct {
-	TrackID     string            `json:"trackId"`
-	Status      string            `json:"status"`
-	Versions    map[string]string `json:"versions"`
-	PreviewPath string            `json:"previewPath"`
-	Error       string            `json:"error,omitempty"`
-	FinishedAt  time.Time         `json:"finishedAt"`
-}
 
 type AudioProcessor struct {
 	consumer    *kafka.Consumer
 	producer    *kafka.Producer
 	tempDir     string
 	resultTopic string
+	ffmpegPath  string
 }
 
 func NewAudioProcessor(kafkaConfig kafka.Config) *AudioProcessor {
+	ffmpegPath, err := findFFmpeg()
+	if err != nil {
+		log.Printf("Warning: FFmpeg not found in PATH: %v", err)
+	}
+
 	return &AudioProcessor{
-		consumer:    kafka.NewConsumer(kafkaConfig, kafkaConfig.TopicAudioProcessing),
+		consumer:    kafka.NewConsumer(kafkaConfig, "audio.processing"),
 		producer:    kafka.NewProducer(kafkaConfig),
 		tempDir:     os.TempDir(),
 		resultTopic: "audio.processing.complete",
+		ffmpegPath:  ffmpegPath,
 	}
+}
+
+func findFFmpeg() (string, error) {
+	ffmpegName := "ffmpeg"
+	if runtime.GOOS == "windows" {
+		ffmpegName = "ffmpeg.exe"
+	}
+
+	if _, err := os.Stat(ffmpegName); err == nil {
+		absPath, _ := filepath.Abs(ffmpegName)
+		return absPath, nil
+	}
+
+	path, err := exec.LookPath(ffmpegName)
+	if err == nil {
+		return path, nil
+	}
+
+	if runtime.GOOS == "windows" {
+		commonPaths := []string{
+			"C:\\ffmpeg\\bin\\ffmpeg.exe",
+			"C:\\ffmpeg\\ffmpeg.exe",
+			"C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe",
+			"C:\\Program Files (x86)\\ffmpeg\\bin\\ffmpeg.exe",
+		}
+
+		for _, path := range commonPaths {
+			if _, err := os.Stat(path); err == nil {
+				return path, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("ffmpeg not found in system")
 }
 
 func (p *AudioProcessor) Start(ctx context.Context) error {
 	log.Println("Starting audio processor...")
 
+	if p.ffmpegPath == "" {
+		log.Println("Warning: FFmpeg not found, audio processing will be limited")
+	} else {
+		log.Printf("Using FFmpeg from: %s", p.ffmpegPath)
+	}
+
 	return p.consumer.ConsumeMessages(ctx, func(key, value []byte) error {
-		var message AudioProcessingMessage
+		var message _struct.AudioProcessingMessage
 		if err := json.Unmarshal(value, &message); err != nil {
 			log.Printf("Error parsing message: %v", err)
 			return err
@@ -74,34 +95,54 @@ func (p *AudioProcessor) Start(ctx context.Context) error {
 
 		log.Printf("Processing audio for track %s", message.TrackID)
 
-		if !p.verifyFileExists(ctx, message.OriginalPath) {
-			log.Printf("File not found in storage: %s", message.OriginalPath)
-			return fmt.Errorf("file not found in storage: %s", message.OriginalPath)
+		var track _struct.Track
+		var trackID uint
+		if _, err := fmt.Sscanf(message.TrackID, "%d", &trackID); err != nil {
+			return fmt.Errorf("invalid track ID format: %v", err)
 		}
 
-		if err := p.saveMessageToDatabase(message); err != nil {
-			log.Printf("Error saving message to database: %v", err)
+		result := database.DB.First(&track, trackID)
+		if result.Error != nil {
+			log.Printf("Track not found in database: %v", result.Error)
+			track = message.ToTrack()
+		} else {
+			track.FilePath = message.FilePath
+			track.FileFormat = message.FileFormat
+		}
+
+		if !p.verifyFileExists(ctx, message.FilePath) {
+			return fmt.Errorf("file not found in storage: %s", message.FilePath)
+		}
+
+		if err := p.saveTrackToDatabase(track); err != nil {
+			log.Printf("Error saving track to database: %v", err)
 			return err
 		}
 
-		go func() {
-			result := p.processAudio(ctx, message)
-			p.sendProcessingResult(ctx, message.TrackID, result)
-			p.updateTrackStatus(ctx, message.TrackID, result.Status)
-		}()
+		if p.ffmpegPath == "" {
+			log.Println("Skipping audio processing due to missing FFmpeg")
+			processingResult := ProcessingResult{
+				TrackID:    message.TrackID,
+				Status:     "skipped",
+				Error:      "FFmpeg not available",
+				FinishedAt: time.Now(),
+			}
+			return p.sendProcessingResult(ctx, message.TrackID, processingResult)
+		}
 
-		return nil
+		processingResult, err := p.processAudio(ctx, message)
+		if err != nil {
+			log.Printf("Error processing audio: %v", err)
+			return err
+		}
+
+		p.updateCache(track)
+
+		return p.sendProcessingResult(ctx, message.TrackID, processingResult)
 	})
 }
 
-func (p *AudioProcessor) Stop() error {
-	if err := p.consumer.Close(); err != nil {
-		return err
-	}
-	return p.producer.Close()
-}
-
-func (p *AudioProcessor) processAudio(ctx context.Context, message AudioProcessingMessage) ProcessingResult {
+func (p *AudioProcessor) processAudio(ctx context.Context, message _struct.AudioProcessingMessage) (ProcessingResult, error) {
 	result := ProcessingResult{
 		TrackID:    message.TrackID,
 		Status:     "failed",
@@ -109,15 +150,15 @@ func (p *AudioProcessor) processAudio(ctx context.Context, message AudioProcessi
 		FinishedAt: time.Now(),
 	}
 
-	tempFile, err := p.downloadOriginalFile(ctx, message.OriginalPath)
+	tempFile, err := p.downloadOriginalFile(ctx, message.FilePath)
 	if err != nil {
 		result.Error = fmt.Sprintf("Failed to download original file: %v", err)
-		log.Println(result.Error)
-		return result
+		return result, err
 	}
 	defer os.Remove(tempFile)
 
-	for _, bitrate := range message.ProcessingRequired {
+	bitrates := []string{"320"}
+	for _, bitrate := range bitrates {
 		processedPath, err := p.convertToBitrate(ctx, tempFile, message.TrackID, bitrate, message.FileFormat)
 		if err != nil {
 			log.Printf("Error converting to bitrate %s: %v", bitrate, err)
@@ -151,7 +192,42 @@ func (p *AudioProcessor) processAudio(ctx context.Context, message AudioProcessi
 		result.Status = "completed"
 	}
 
-	return result
+	return result, nil
+}
+
+func (p *AudioProcessor) saveTrackToDatabase(track _struct.Track) error {
+	if track.ID == 0 {
+		return database.DB.Create(&track).Error
+	}
+	return database.DB.Save(&track).Error
+}
+
+func (p *AudioProcessor) updateCache(track _struct.Track) {
+	cacheKey := fmt.Sprintf("track:%d:info", track.ID)
+	if trackData, err := json.Marshal(track); err == nil {
+		cache.CacheTrackData(cacheKey, string(trackData), 24*time.Hour)
+	}
+}
+
+func (p *AudioProcessor) Stop() error {
+	if err := p.consumer.Close(); err != nil {
+		return err
+	}
+	return p.producer.Close()
+}
+
+type ProcessingResult struct {
+	TrackID     string            `json:"trackId"`
+	Status      string            `json:"status"`
+	Versions    map[string]string `json:"versions"`
+	PreviewPath string            `json:"previewPath,omitempty"`
+	Error       string            `json:"error,omitempty"`
+	FinishedAt  time.Time         `json:"finishedAt"`
+}
+
+func (p *AudioProcessor) verifyFileExists(ctx context.Context, objectPath string) bool {
+	_, err := storage.GetFileInfo("audio-tracks", objectPath)
+	return err == nil
 }
 
 func (p *AudioProcessor) downloadOriginalFile(ctx context.Context, objectPath string) (string, error) {
@@ -176,13 +252,17 @@ func (p *AudioProcessor) downloadOriginalFile(ctx context.Context, objectPath st
 }
 
 func (p *AudioProcessor) convertToBitrate(ctx context.Context, inputFile, trackID, bitrate, format string) (string, error) {
+	if p.ffmpegPath == "" {
+		return "", fmt.Errorf("ffmpeg not available")
+	}
+
 	outputPath := filepath.Join(p.tempDir, fmt.Sprintf("%s_%s.mp3", trackID, bitrate))
 
 	var cmd *exec.Cmd
 	if format == "mp3" {
-		cmd = exec.CommandContext(ctx, "ffmpeg", "-i", inputFile, "-b:a", bitrate+"k", "-map", "0:a", outputPath)
+		cmd = exec.CommandContext(ctx, p.ffmpegPath, "-i", inputFile, "-b:a", bitrate+"k", "-map", "0:a", outputPath)
 	} else {
-		cmd = exec.CommandContext(ctx, "ffmpeg", "-i", inputFile, "-b:a", bitrate+"k", "-codec:a", "libmp3lame", "-map", "0:a", outputPath)
+		cmd = exec.CommandContext(ctx, p.ffmpegPath, "-i", inputFile, "-b:a", bitrate+"k", "-codec:a", "libmp3lame", "-map", "0:a", outputPath)
 	}
 
 	output, err := cmd.CombinedOutput()
@@ -194,9 +274,13 @@ func (p *AudioProcessor) convertToBitrate(ctx context.Context, inputFile, trackI
 }
 
 func (p *AudioProcessor) createPreview(ctx context.Context, inputFile, trackID, format string) (string, error) {
+	if p.ffmpegPath == "" {
+		return "", fmt.Errorf("ffmpeg not available")
+	}
+
 	outputPath := filepath.Join(p.tempDir, fmt.Sprintf("%s_preview.mp3", trackID))
 
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-i", inputFile, "-ss", "15", "-t", "30", "-b:a", "128k", "-codec:a", "libmp3lame", outputPath)
+	cmd := exec.CommandContext(ctx, p.ffmpegPath, "-i", inputFile, "-ss", "15", "-t", "30", "-b:a", "128k", "-codec:a", "libmp3lame", outputPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("ffmpeg preview error: %v, output: %s", err, string(output))
@@ -221,86 +305,11 @@ func (p *AudioProcessor) uploadProcessedFile(ctx context.Context, filePath, buck
 	return storage.UploadAudioFile(bucketName, objectName, file, fileInfo.Size(), contentType)
 }
 
-func (p *AudioProcessor) sendProcessingResult(ctx context.Context, trackID string, result ProcessingResult) {
+func (p *AudioProcessor) sendProcessingResult(ctx context.Context, trackID string, result ProcessingResult) error {
 	jsonData, err := json.Marshal(result)
 	if err != nil {
-		log.Printf("Error marshaling result: %v", err)
-		return
+		return fmt.Errorf("error marshaling result: %w", err)
 	}
 
-	if err := p.producer.SendMessage(ctx, p.resultTopic, []byte(trackID), jsonData); err != nil {
-		log.Printf("Error sending result to Kafka: %v", err)
-	}
-}
-
-func (p *AudioProcessor) updateTrackStatus(ctx context.Context, trackID, status string) {
-	key := fmt.Sprintf("track:%s:processing_status", trackID)
-
-	statusData := map[string]interface{}{
-		"status":       status,
-		"completed_at": time.Now().Unix(),
-	}
-
-	jsonData, err := json.Marshal(statusData)
-	if err != nil {
-		log.Printf("Error marshaling status data: %v", err)
-		return
-	}
-
-	if err := cache.CacheTrackData(key, string(jsonData), 24*time.Hour); err != nil {
-		log.Printf("Error caching track status: %v", err)
-	}
-}
-
-func (p *AudioProcessor) verifyFileExists(ctx context.Context, objectPath string) bool {
-	_, err := storage.GetFileInfo("audio-tracks", objectPath)
-	return err == nil
-}
-
-func (p *AudioProcessor) saveMessageToDatabase(message AudioProcessingMessage) error {
-	log.Printf("Saving track message to database: %s", message.TrackID)
-
-	var userID uint
-	if _, err := fmt.Sscanf(message.UserID, "%d", &userID); err != nil {
-		log.Printf("Warning: Could not parse user ID as uint, using default value. Error: %v", err)
-		userID = 1
-	}
-
-	duration := float64(message.Metadata.Duration)
-
-	track := _struct.Track{
-		Title:      message.Metadata.Title,
-		ArtistID:   1,
-		UserID:     userID,
-		FilePath:   message.OriginalPath,
-		FileFormat: message.FileFormat,
-		Duration:   duration,
-		Genre:      message.Metadata.Genre,
-	}
-
-	if err := database.DB.Create(&track).Error; err != nil {
-		return fmt.Errorf("failed to save track to database: %w", err)
-	}
-
-	for _, bitrate := range message.ProcessingRequired {
-		var bitrateInt int
-		if _, err := fmt.Sscanf(bitrate, "%d", &bitrateInt); err != nil {
-			log.Printf("Warning: Could not parse bitrate %s as int, skipping. Error: %v", bitrate, err)
-			continue
-		}
-
-		job := _struct.ConversionJob{
-			TrackID:        track.ID,
-			SourceFormatID: 1,
-			TargetFormatID: 1,
-			Status:         _struct.ConversionPending,
-			Priority:       1,
-		}
-
-		if err := database.DB.Create(&job).Error; err != nil {
-			log.Printf("Error creating conversion job for track %s with bitrate %s: %v", message.TrackID, bitrate, err)
-		}
-	}
-
-	return nil
+	return p.producer.SendMessage(ctx, p.resultTopic, []byte(trackID), jsonData)
 }

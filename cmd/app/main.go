@@ -7,6 +7,7 @@ import (
 	"music-conveyor/platform/config"
 	"music-conveyor/platform/database"
 	"music-conveyor/platform/kafka"
+	"music-conveyor/platform/middleware"
 	"music-conveyor/platform/storage"
 	"os"
 	"os/signal"
@@ -20,20 +21,17 @@ var appConfig *config.Config
 func main() {
 	appConfig = config.LoadConfig()
 
-	if appConfig.Environment != "app" {
+	if appConfig.Environment != "development" {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
 	initializeServices()
-
 	setupGracefulShutdown()
 
 	router := gin.Default()
-
 	router.MaxMultipartMemory = appConfig.MaxUploadSize
 
 	setupMiddleware(router)
-
 	setupRoutes(router)
 
 	log.Printf("Starting audio streaming service on :%s", appConfig.Port)
@@ -43,12 +41,42 @@ func main() {
 	}
 }
 
+func setupMiddleware(router *gin.Engine) {
+	router.Use(cors())
+	router.Use(gin.Logger())
+	router.Use(gin.Recovery())
+}
+
+func setupRoutes(router *gin.Engine) {
+	router.GET("/health", controllers.HealthCheck)
+
+	auth := router.Group("/api/auth")
+	{
+		auth.POST("/login", controllers.GenerateToken)
+	}
+
+	api := router.Group("/api")
+	api.Use(middleware.AuthMiddleware())
+	{
+		stream := api.Group("/stream")
+		{
+			stream.GET("/:id", controllers.StreamTrack)
+			stream.GET("/:id/download", controllers.DownloadTrack)
+			stream.GET("/status", controllers.StreamStatus)
+		}
+
+		tracks := api.Group("/tracks")
+		{
+			tracks.GET("/:id/qualities", controllers.GetStreamableQualities)
+			tracks.GET("/:id/preview", controllers.StreamPreview)
+		}
+	}
+}
+
 func initializeServices() {
 	database.ConnectDatabase()
-
 	cache.ConnectRedis()
 	storage.ConnectMinio()
-
 	kafka.NewKafkaConfig()
 	log.Println("All services initialized successfully")
 }
@@ -73,25 +101,6 @@ func setupGracefulShutdown() {
 		log.Println("All services shut down gracefully")
 		os.Exit(0)
 	}()
-}
-
-func setupMiddleware(router *gin.Engine) {
-	router.Use(cors())
-
-	router.Use(gin.Logger())
-
-	router.Use(gin.Recovery())
-}
-
-func setupRoutes(router *gin.Engine) {
-	router.GET("/health", controllers.HealthCheck)
-
-	streamGroup := router.Group("/api/stream")
-	{
-		streamGroup.GET("/:id", controllers.StreamTrack)
-		streamGroup.GET("/:id/download", controllers.DownloadTrack)
-		streamGroup.GET("/status", controllers.StreamStatus)
-	}
 }
 
 func cors() gin.HandlerFunc {
