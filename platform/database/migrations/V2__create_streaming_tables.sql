@@ -1,0 +1,40 @@
+CREATE TABLE IF NOT EXISTS stream_configs (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    format_id INTEGER REFERENCES audio_formats(id),
+    bitrate INTEGER NOT NULL,
+    sample_rate INTEGER NOT NULL,
+    channels INTEGER NOT NULL,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS stream_sessions (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id),
+    track_id INTEGER REFERENCES tracks(id),
+    config_id INTEGER REFERENCES stream_configs(id),
+    start_time TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    end_time TIMESTAMP WITH TIME ZONE,
+    status VARCHAR(50) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS stream_stats (
+    id SERIAL PRIMARY KEY,
+    session_id INTEGER REFERENCES stream_sessions(id) ON DELETE CASCADE,
+    bytes_sent BIGINT DEFAULT 0,
+    duration INTEGER DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS audio_cache (
+    id SERIAL PRIMARY KEY,
+    track_id INTEGER REFERENCES tracks(id) ON DELETE CASCADE,
+    format_id INTEGER REFERENCES audio_formats(id),
+    file_path VARCHAR(255) NOT NULL,
+    file_size BIGINT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    last_accessed TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+); 

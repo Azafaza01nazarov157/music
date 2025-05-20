@@ -3,7 +3,6 @@ package database
 import (
 	"fmt"
 	"log"
-	_struct "music-conveyor/models/struct"
 	"music-conveyor/platform/config"
 	"os"
 	"time"
@@ -53,33 +52,9 @@ func ConnectDatabase() {
 	sqlDB.SetMaxOpenConns(100)
 	sqlDB.SetConnMaxLifetime(time.Hour)
 
-	migrateDatabase()
-}
-
-func migrateDatabase() {
-	log.Println("Running database migrations...")
-
-	err := DB.AutoMigrate(
-		&_struct.User{},
-		&_struct.Track{},
-		&_struct.StreamSession{},
-		&_struct.AudioFormat{},
-		&_struct.AudioCache{},
-		&_struct.StreamStats{},
-		&_struct.ConversionJob{},
-		&_struct.AudioProcessingMessage{},
-		&_struct.TrackMessage{},
-		&_struct.TrackQuality{},
-		&_struct.PreviewPlay{},
-		&_struct.StreamConfig{},
-		&_struct.StorageLocation{},
-	)
-
-	if err != nil {
-		log.Fatalf("Database migration failed: %v", err)
+	if err := RunMigrations(); err != nil {
+		log.Fatalf("Failed to run database migrations: %v", err)
 	}
-
-	log.Println("Database migration completed successfully")
 }
 
 func CloseDatabase() {

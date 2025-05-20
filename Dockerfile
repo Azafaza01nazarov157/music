@@ -3,19 +3,16 @@ FROM golang:1.23-alpine AS builder
 RUN apk update && apk add --no-cache ca-certificates git
 
 # Install FFmpeg with all necessary dependencies
-RUN apk add --no-cache ffmpeg \
+RUN apk add --no-cache \
+    ffmpeg \
     libass \
     libbluray \
     libdrm \
     libtheora \
     libvorbis \
     libvpx \
-    libx264 \
-    libx265 \
     opus \
-    sdl2 \
-    x264-dev \
-    x265-dev
+    sdl2
 
 WORKDIR /app
 
@@ -40,11 +37,8 @@ RUN apk update && apk add --no-cache \
     libtheora \
     libvorbis \
     libvpx \
-    libx264 \
-    libx265 \
     opus \
-    sdl2 \
-    ca-certificates
+    sdl2
 
 WORKDIR /app
 

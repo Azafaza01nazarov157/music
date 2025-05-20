@@ -1,0 +1,35 @@
+CREATE TABLE IF NOT EXISTS conversion_jobs (
+    id SERIAL PRIMARY KEY,
+    track_id INTEGER REFERENCES tracks(id) ON DELETE CASCADE,
+    source_format_id INTEGER REFERENCES audio_formats(id),
+    target_format_id INTEGER REFERENCES audio_formats(id),
+    status VARCHAR(50) NOT NULL,
+    priority INTEGER DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS audio_processing_messages (
+    id SERIAL PRIMARY KEY,
+    job_id INTEGER REFERENCES conversion_jobs(id) ON DELETE CASCADE,
+    message_type VARCHAR(50) NOT NULL,
+    message TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS track_messages (
+    id SERIAL PRIMARY KEY,
+    track_id INTEGER REFERENCES tracks(id) ON DELETE CASCADE,
+    message_type VARCHAR(50) NOT NULL,
+    message TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS preview_plays (
+    id SERIAL PRIMARY KEY,
+    track_id INTEGER REFERENCES tracks(id) ON DELETE CASCADE,
+    user_id INTEGER REFERENCES users(id),
+    start_time INTEGER NOT NULL,
+    duration INTEGER NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+); 
